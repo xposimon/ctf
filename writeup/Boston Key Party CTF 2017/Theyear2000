@@ -1,0 +1,20 @@
+##Theyear 2000
+key: git泄露
+存在git泄露，随便找个工具下载下来。然后查看logs/HEAD/
+（直接 git log 查看不全。有一些文件被删除了）
+找到这个
+9e9ce4da43d0d2dc10ece64f75ec9cab1f4e5de0 e039a6684f53e818926d3f62efd25217b25fc97e Mark Zuckerberg <thezuck@therealzuck.zuck> 1486853668 +0000	reset: moving to HEAD~1
+直接用git的底层命令
+git cat-file -p 9e9ce4da43d0d2dc10ece64f75ec9cab1f4e5de0
+tree bd72ee2c7c5adb017076fd47a92858cef2a04c11
+parent e039a6684f53e818926d3f62efd25217b25fc97e
+author Mark Zuckerberg <thezuck@therealzuck.zuck> 1486853667 +0000
+committer Mark Zuckerberg <thezuck@therealzuck.zuck> 1486853667 +0000
+
+Fixed a spelling error
+
+git cat-file -p bd72ee2c7c5adb017076fd47a92858cef2a04c11
+100644 blob 7baff32394e517c44f35b75079a9496559c88053    index.html
+
+git cat-file -p 7baff32394e517c44f35b75079a9496559c88053
+得到flag、具体原因参考git的文件结构
