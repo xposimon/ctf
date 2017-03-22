@@ -29,9 +29,7 @@ window.location.href='http://202.120.7.213:11181/api.php?id='+args["id"]+'&hash=
 
 
 ##Complicated XSS
-key:
-注意一下xss过去的cookie要转义一下
-<\/script>
+key:注意一下xss过去的cookie要转义一下 <\/script>
 + -> %2b
 " -> %22
 ' -> %27等等
